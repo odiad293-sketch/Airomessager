@@ -1,5 +1,5 @@
 // --------------------
-// airo.js - Full single-file app
+// airo.js - Full single-file app (Corrected)
 // --------------------
 const express = require('express');
 const fileUpload = require('express-fileupload');
@@ -8,24 +8,39 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const path = require('path');
 const cors = require('cors');
+const fs = require('fs');
 const app = express();
 const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
 require('dotenv').config();
 
+// --------------------
+// Middleware setup
+// --------------------
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload());
-app.use('/uploads', express.static(path.join(__dirname,'uploads')));
+
+// Ensure uploads folder exists
+const uploadsDir = path.join(__dirname, 'uploads');
+if (!fs.existsSync(uploadsDir)) {
+    fs.mkdirSync(uploadsDir, { recursive: true });
+}
+app.use('/uploads', express.static(uploadsDir));
 
 // --------------------
 // MongoDB setup
 // --------------------
-mongoose.connect(process.env.MONGO_URI, { useNewUrlParser:true, useUnifiedTopology:true })
-.then(()=>console.log('MongoDB connected'))
-.catch(err=>console.log(err));
+if (!process.env.MONGO_URI) {
+    console.error('Error: MONGO_URI not set!');
+    process.exit(1);
+}
+
+mongoose.connect(process.env.MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
+    .then(() => console.log('MongoDB connected'))
+    .catch(err => console.log('MongoDB connection error:', err));
 
 // --------------------
 // MongoDB Schemas
@@ -33,104 +48,120 @@ mongoose.connect(process.env.MONGO_URI, { useNewUrlParser:true, useUnifiedTopolo
 const { Schema, model } = mongoose;
 
 const userSchema = new Schema({
-  username: String,
-  email: { type: String, unique: true },
-  password: String,
-  profile_photo: String,
-  isAdmin: { type: Boolean, default: false }
-}, { timestamps:true });
+    username: String,
+    email: { type: String, unique: true },
+    password: String,
+    profile_photo: String,
+    isAdmin: { type: Boolean, default: false }
+}, { timestamps: true });
 const User = model('User', userSchema);
 
 const messageSchema = new Schema({
-  sender_id: { type: Schema.Types.ObjectId, ref:'User' },
-  receiver_id: { type: Schema.Types.ObjectId, ref:'User' },
-  content: String,
-  media_url: String,
-  media_type: String
-}, { timestamps:true });
+    sender_id: { type: Schema.Types.ObjectId, ref: 'User' },
+    receiver_id: { type: Schema.Types.ObjectId, ref: 'User' },
+    content: String,
+    media_url: String,
+    media_type: String
+}, { timestamps: true });
 const Message = model('Message', messageSchema);
 
 const statusSchema = new Schema({
-  user_id: { type: Schema.Types.ObjectId, ref:'User' },
-  content: String,
-  media_url: String,
-  media_type: String,
-  expire_at: Date
-}, { timestamps:true });
+    user_id: { type: Schema.Types.ObjectId, ref: 'User' },
+    content: String,
+    media_url: String,
+    media_type: String,
+    expire_at: Date
+}, { timestamps: true });
 const Status = model('Status', statusSchema);
 
 // --------------------
-// Middleware
+// JWT Middleware
 // --------------------
-const verifyToken = (req,res,next)=>{
-  const token = req.headers['authorization']?.split(' ')[1];
-  if(!token) return res.status(401).send('Unauthorized');
-  try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    req.userId = decoded.id;
-    next();
-  } catch(e){ return res.status(401).send('Invalid Token'); }
+const verifyToken = (req, res, next) => {
+    const token = req.headers['authorization']?.split(' ')[1];
+    if (!token) return res.status(401).send('Unauthorized');
+    try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        req.userId = decoded.id;
+        next();
+    } catch (e) {
+        return res.status(401).send('Invalid Token');
+    }
 };
 
-const verifyAdmin = async (req,res,next)=>{
-  const user = await User.findById(req.userId);
-  if(user && user.isAdmin) next();
-  else res.status(403).send('Admin only');
+const verifyAdmin = async (req, res, next) => {
+    const user = await User.findById(req.userId);
+    if (user && user.isAdmin) next();
+    else res.status(403).send('Admin only');
 };
+
+// --------------------
+// Root Route
+// --------------------
+app.get('/', (req, res) => {
+    res.send('Welcome to Airo Messenger! Please log in at /login');
+});
 
 // --------------------
 // Auth routes
 // --------------------
-app.post('/signup', async (req,res)=>{
-  try {
-    const { username,email,password } = req.body;
-    if(!username||!email||!password) return res.status(400).send('Missing fields');
-    const hash = await bcrypt.hash(password,10);
+app.post('/signup', async (req, res) => {
+    try {
+        const { username, email, password } = req.body;
+        if (!username || !email || !password) return res.status(400).send('Missing fields');
+        const hash = await bcrypt.hash(password, 10);
 
-    let profile_photo = null;
-    if(req.files && req.files.profile_photo){
-      const file = req.files.profile_photo;
-      const uploadPath = __dirname+'/uploads/'+Date.now()+'-'+file.name;
-      await file.mv(uploadPath);
-      profile_photo = '/uploads/'+file.name;
+        let profile_photo = null;
+        if (req.files && req.files.profile_photo) {
+            const file = req.files.profile_photo;
+            const fileName = Date.now() + '-' + file.name;
+            const uploadPath = path.join(uploadsDir, fileName);
+            await file.mv(uploadPath);
+            profile_photo = '/uploads/' + fileName;
+        }
+
+        const user = new User({ username, email, password: hash, profile_photo });
+        if (email === process.env.ADMIN_EMAIL) user.isAdmin = true;
+
+        await user.save();
+        res.json({ message: 'User created' });
+    } catch (e) {
+        console.log(e);
+        res.status(500).send('Error');
     }
-
-    const user = new User({ username,email,password:hash,profile_photo });
-    if(email===process.env.ADMIN_EMAIL) user.isAdmin = true;
-
-    await user.save();
-    res.json({ message:'User created' });
-  } catch(e){ console.log(e); res.status(500).send('Error'); }
 });
 
-app.post('/login', async (req,res)=>{
-  try {
-    const { email,password } = req.body;
-    const user = await User.findOne({ email });
-    if(!user) return res.status(400).send('User not found');
-    const valid = await bcrypt.compare(password,user.password);
-    if(!valid) return res.status(400).send('Wrong password');
-    const token = jwt.sign({ id:user._id }, process.env.JWT_SECRET,{ expiresIn:'7d' });
-    res.json({ token });
-  } catch(e){ console.log(e); res.status(500).send('Error'); }
+app.post('/login', async (req, res) => {
+    try {
+        const { email, password } = req.body;
+        const user = await User.findOne({ email });
+        if (!user) return res.status(400).send('User not found');
+        const valid = await bcrypt.compare(password, user.password);
+        if (!valid) return res.status(400).send('Wrong password');
+        const token = jwt.sign({ id: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+        res.json({ token });
+    } catch (e) {
+        console.log(e);
+        res.status(500).send('Error');
+    }
 });
 
 // --------------------
 // User dashboard
 // --------------------
-app.get('/dashboard', verifyToken, async (req,res)=>{
-  const currentUser = await User.findById(req.userId);
-  const otherUsers = await User.find({ _id: { $ne: req.userId } });
+app.get('/dashboard', verifyToken, async (req, res) => {
+    const currentUser = await User.findById(req.userId);
+    const otherUsers = await User.find({ _id: { $ne: req.userId } });
 
-  let usersListHTML = '';
-  otherUsers.forEach(u=>{
-    usersListHTML += `<div class="p-2 border-b cursor-pointer hover:bg-gray-200 chat-user" data-id="${u._id}">
-      <img src="${u.profile_photo||'https://via.placeholder.com/40'}" class="w-10 h-10 rounded-full inline mr-2">
-      <span>${u.username}</span>
-    </div>`;
-  });
+    let usersListHTML = '';
+    otherUsers.forEach(u => {
+        usersListHTML += `<div class="p-2 border-b cursor-pointer hover:bg-gray-200 chat-user" data-id="${u._id}">
+            <img src="${u.profile_photo || 'https://via.placeholder.com/40'}" class="w-10 h-10 rounded-full inline mr-2">
+            <span>${u.username}</span>
+        </div>`;
+    });
 
-  res.send(`
+    res.send(`
 <!DOCTYPE html>
 <html>
 <head>
@@ -171,7 +202,7 @@ app.get('/dashboard', verifyToken, async (req,res)=>{
 </div>
 
 <script>
-const socket = io();
+const socket = io(window.location.origin);
 let selectedUserId = null;
 
 document.querySelectorAll('.chat-user').forEach(el=>{
@@ -259,14 +290,15 @@ app.post('/chat/:userId', verifyToken, async (req,res)=>{
   let media_url=null, media_type=null;
   if(req.files && req.files.media){
     const file = req.files.media;
-    const uploadPath = __dirname+'/uploads/'+Date.now()+'-'+file.name;
+    const fileName = Date.now() + '-' + file.name;
+    const uploadPath = path.join(uploadsDir, fileName);
     await file.mv(uploadPath);
-    media_url='/uploads/'+file.name;
+    media_url='/uploads/'+fileName;
     media_type=file.mimetype;
   }
   const message = new Message({ sender_id:req.userId, receiver_id:req.params.userId, content:req.body.content, media_url, media_type });
   await message.save();
-  io.emit('receiveMessage',message);
+  io.emit('receiveMessage', message);
   res.json(message);
 });
 
@@ -277,9 +309,10 @@ app.post('/status', verifyToken, async (req,res)=>{
   let media_url=null, media_type=null;
   if(req.files && req.files.media){
     const file = req.files.media;
-    const uploadPath = __dirname+'/uploads/'+Date.now()+'-'+file.name;
+    const fileName = Date.now() + '-' + file.name;
+    const uploadPath = path.join(uploadsDir, fileName);
     await file.mv(uploadPath);
-    media_url='/uploads/'+file.name;
+    media_url='/uploads/'+fileName;
     media_type=file.mimetype;
   }
   const status = new Status({ user_id:req.userId, content:req.body.content, media_url, media_type, expire_at:new Date(Date.now()+24*60*60*1000) });
@@ -330,4 +363,4 @@ app.get('/admin/dashboard', verifyToken, verifyAdmin, async (req,res)=>{
 // Start server
 // --------------------
 const PORT = process.env.PORT || 3000;
-http.listen(PORT,()=>console.log('Airo running on port '+PORT));
+http.listen(PORT, ()=>console.log('Airo running on port '+PORT));
