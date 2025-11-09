@@ -1,5 +1,5 @@
 // --------------------
-// airo.js - Full single-file app (Ready to run)
+// airo.js - Full single-file app with dashboard, chat, status
 // --------------------
 const express = require('express');
 const fileUpload = require('express-fileupload');
@@ -14,14 +14,14 @@ const http = require('http').createServer(app);
 const io = require('socket.io')(http);
 
 // --------------------
-// Config (Development Hardcoded)
+// Config
 // --------------------
 const MONGO_URI = 'mongodb+srv://etiosaodia:destiny@cluster0.a1hcszb.mongodb.net/?appName=Cluster0';
 const JWT_SECRET = 'mysecret123';
 const ADMIN_EMAIL = 'odiad293@gmail.com';
 
 // --------------------
-// Middleware setup
+// Middleware
 // --------------------
 app.use(cors());
 app.use(express.json());
@@ -30,20 +30,18 @@ app.use(fileUpload());
 
 // Ensure uploads folder exists
 const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
+if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
 
 // --------------------
-// MongoDB setup
+// MongoDB Setup
 // --------------------
 mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
     .then(() => console.log('MongoDB connected'))
     .catch(err => console.log('MongoDB connection error:', err));
 
 // --------------------
-// MongoDB Schemas
+// Schemas
 // --------------------
 const { Schema, model } = mongoose;
 
@@ -96,14 +94,97 @@ const verifyAdmin = async (req, res, next) => {
 };
 
 // --------------------
-// Root Route
+// Routes
 // --------------------
-app.get('/', (req, res) => {
-    res.send('Welcome to Airo Messenger! Please log in at /login');
+
+// Redirect root to login
+app.get('/', (req, res) => res.redirect('/login'));
+
+// --------------------
+// Login Page
+// --------------------
+app.get('/login', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Airo Login</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+<div class="bg-white p-8 rounded shadow-md w-96">
+<h1 class="text-2xl font-bold mb-4">Airo Messenger Login</h1>
+<form id="login-form">
+  <input type="email" id="email" placeholder="Email" class="border w-full p-2 mb-2 rounded" required>
+  <input type="password" id="password" placeholder="Password" class="border w-full p-2 mb-4 rounded" required>
+  <button type="submit" class="bg-blue-500 text-white w-full py-2 rounded">Login</button>
+</form>
+<p class="mt-4 text-sm">Don't have an account? <a href="/signup" class="text-blue-500">Sign Up</a></p>
+<script>
+document.getElementById('login-form').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    const res = await fetch('/login', {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ email, password })
+    });
+    const data = await res.json();
+    if(res.ok){
+        localStorage.setItem('token', data.token);
+        window.location.href = '/dashboard';
+    } else alert(data || 'Login failed');
+});
+</script>
+</div>
+</body>
+</html>
+    `);
 });
 
 // --------------------
-// Auth routes
+// Signup Page
+// --------------------
+app.get('/signup', (req, res) => {
+    res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Airo Sign Up</title>
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+<div class="bg-white p-8 rounded shadow-md w-96">
+<h1 class="text-2xl font-bold mb-4">Sign Up</h1>
+<form id="signup-form" enctype="multipart/form-data">
+  <input type="text" name="username" placeholder="Username" class="border w-full p-2 mb-2 rounded" required>
+  <input type="email" name="email" placeholder="Email" class="border w-full p-2 mb-2 rounded" required>
+  <input type="password" name="password" placeholder="Password" class="border w-full p-2 mb-2 rounded" required>
+  <input type="file" name="profile_photo" class="mb-2">
+  <button type="submit" class="bg-green-500 text-white w-full py-2 rounded">Sign Up</button>
+</form>
+<p class="mt-4 text-sm">Already have an account? <a href="/login" class="text-blue-500">Login</a></p>
+<script>
+document.getElementById('signup-form').addEventListener('submit', async e=>{
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    const res = await fetch('/signup', { method:'POST', body: formData });
+    const data = await res.json();
+    if(res.ok){ alert('Account created'); window.location.href='/login'; }
+    else alert(data || 'Signup failed');
+});
+</script>
+</div>
+</body>
+</html>
+    `);
+});
+
+// --------------------
+// Signup POST
 // --------------------
 app.post('/signup', async (req, res) => {
     try {
@@ -122,7 +203,6 @@ app.post('/signup', async (req, res) => {
 
         const user = new User({ username, email, password: hash, profile_photo });
         if (email === ADMIN_EMAIL) user.isAdmin = true;
-
         await user.save();
         res.json({ message: 'User created' });
     } catch (e) {
@@ -131,6 +211,9 @@ app.post('/signup', async (req, res) => {
     }
 });
 
+// --------------------
+// Login POST
+// --------------------
 app.post('/login', async (req, res) => {
     try {
         const { email, password } = req.body;
@@ -140,14 +223,11 @@ app.post('/login', async (req, res) => {
         if (!valid) return res.status(400).send('Wrong password');
         const token = jwt.sign({ id: user._id }, JWT_SECRET, { expiresIn: '7d' });
         res.json({ token });
-    } catch (e) {
-        console.log(e);
-        res.status(500).send('Error');
-    }
+    } catch (e) { console.log(e); res.status(500).send('Error'); }
 });
 
 // --------------------
-// User dashboard
+// Dashboard Page
 // --------------------
 app.get('/dashboard', verifyToken, async (req, res) => {
     const currentUser = await User.findById(req.userId);
@@ -188,6 +268,7 @@ app.get('/dashboard', verifyToken, async (req, res) => {
     </div>
   </div>
 </div>
+
 <div id="status-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center">
   <div class="bg-white p-4 rounded w-1/3">
     <h3 class="font-bold mb-2">Post Status</h3>
@@ -199,8 +280,8 @@ app.get('/dashboard', verifyToken, async (req, res) => {
     </div>
   </div>
 </div>
+
 <script>
-// Socket.io + chat logic
 const socket = io(window.location.origin);
 let selectedUserId = null;
 
@@ -269,11 +350,11 @@ document.getElementById('post-status-confirm').addEventListener('click',async()=
 </script>
 </body>
 </html>
-  `);
+    `);
 });
 
 // --------------------
-// Chat API
+// Chat GET
 // --------------------
 app.get('/chat/:userId', verifyToken, async (req,res)=>{
   const messages = await Message.find({
@@ -285,6 +366,9 @@ app.get('/chat/:userId', verifyToken, async (req,res)=>{
   res.json(messages);
 });
 
+// --------------------
+// Chat POST
+// --------------------
 app.post('/chat/:userId', verifyToken, async (req,res)=>{
   let media_url=null, media_type=null;
   if(req.files && req.files.media){
@@ -302,7 +386,7 @@ app.post('/chat/:userId', verifyToken, async (req,res)=>{
 });
 
 // --------------------
-// Status API
+// Status POST
 // --------------------
 app.post('/status', verifyToken, async (req,res)=>{
   let media_url=null, media_type=null;
@@ -319,47 +403,16 @@ app.post('/status', verifyToken, async (req,res)=>{
   res.json(status);
 });
 
+// --------------------
+// Status GET
+// --------------------
 app.get('/status', verifyToken, async (req,res)=>{
   const statuses = await Status.find({ expire_at: { $gt: new Date() } }).populate('user_id','username profile_photo');
   res.json(statuses);
 });
 
 // --------------------
-// Admin dashboard
-// --------------------
-app.get('/admin/dashboard', verifyToken, verifyAdmin, async (req,res)=>{
-  const users = await User.find();
-  const messages = await Message.find();
-  const statuses = await Status.find();
-
-  let usersHTML='', messagesHTML='', statusesHTML='';
-  users.forEach(u=>usersHTML+=`<tr><td>${u._id}</td><td>${u.username}</td><td>${u.email}</td><td>${u.profile_photo||''}</td></tr>`);
-  messages.forEach(m=>messagesHTML+=`<tr><td>${m._id}</td><td>${m.sender_id}</td><td>${m.receiver_id}</td><td>${m.content||''}</td></tr>`);
-  statuses.forEach(s=>statusesHTML+=`<tr><td>${s._id}</td><td>${s.user_id}</td><td>${s.content||''}</td></tr>`);
-
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Admin Dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 font-sans p-4">
-<h1 class="text-3xl font-bold mb-4">Admin Dashboard</h1>
-<h2 class="font-bold mt-4">Users</h2>
-<table class="table-auto border mb-4"><tr><th>ID</th><th>Username</th><th>Email</th><th>Photo</th></tr>${usersHTML}</table>
-<h2 class="font-bold mt-4">Messages</h2>
-<table class="table-auto border mb-4"><tr><th>ID</th><th>Sender</th><th>Receiver</th><th>Content</th></tr>${messagesHTML}</table>
-<h2 class="font-bold mt-4">Statuses</h2>
-<table class="table-auto border mb-4"><tr><th>ID</th><th>User</th><th>Content</th></tr>${statusesHTML}</table>
-</body>
-</html>
-  `);
-});
-
-// --------------------
 // Start server
 // --------------------
 const PORT = process.env.PORT || 3000;
-http.listen(PORT, ()=>console.log('Airo running on port '+PORT));
+http.listen(PORT, () => console.log('Airo running on port '+PORT));
