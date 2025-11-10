@@ -12,6 +12,7 @@
     "mongoose": "^7.5.0",
     "body-parser": "^1.20.2",
     "cors": "^2.8.5",
-    "express-session": "^1.17.3"
+    "express-session": "^1.17.3",
+    "express-fileupload": "^1.4.3"
   }
 }
