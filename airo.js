@@ -1,44 +1,42 @@
 // --------------------
-// airo.js - Full single-file app with sessions
+// airo.js - Full WhatsApp-style Messenger (Single File)
 // --------------------
 const express = require('express');
 const fileUpload = require('express-fileupload');
 const mongoose = require('mongoose');
 const bcrypt = require('bcrypt');
 const path = require('path');
-const cors = require('cors');
 const fs = require('fs');
-const session = require('express-session');
 const http = require('http');
-const socketIo = require('socket.io');
+const socketIO = require('socket.io');
 
 const app = express();
 const server = http.createServer(app);
-const io = socketIo(server, { cors: { origin: '*' } });
+const io = socketIO(server);
+
+const PORT = process.env.PORT || 3000;
 
 // --------------------
-// MongoDB setup (credentials in code)
+// MongoDB Connection
 // --------------------
 const MONGO_URI = 'mongodb+srv://etiosaodia:destiny@cluster0.a1hcszb.mongodb.net/?appName=Cluster0';
 mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-    .then(() => console.log('MongoDB connected'))
-    .catch(err => console.log('MongoDB connection error:', err));
+  .then(async () => {
+    console.log('MongoDB connected');
+    // Delete old test users/messages on first run
+    await User.deleteMany({}); 
+    await Message.deleteMany({});
+    await Status.deleteMany({});
+  })
+  .catch(err => console.log('MongoDB connection error:', err));
 
 // --------------------
 // Middleware
 // --------------------
-app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(fileUpload());
-app.use(session({
-    secret: 'airoSecretKey123', // session secret
-    resave: false,
-    saveUninitialized: false,
-    cookie: { maxAge: 7 * 24 * 60 * 60 * 1000 } // 7 days
-}));
 
-// Ensure uploads folder exists
 const uploadsDir = path.join(__dirname, 'uploads');
 if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 app.use('/uploads', express.static(uploadsDir));
@@ -49,330 +47,409 @@ app.use('/uploads', express.static(uploadsDir));
 const { Schema, model } = mongoose;
 
 const userSchema = new Schema({
-    username: { type: String, unique: true },
-    email: { type: String, unique: true },
-    password: String,
-    profile_photo: String,
-    isAdmin: { type: Boolean, default: false }
+  fullName: String,
+  username: { type: String, unique: true },
+  password: String,
+  dob: Date,
+  email: String,
+  bio: String,
+  profilePhoto: String,
+  verified: { type: Boolean, default: false },
+  isAdmin: { type: Boolean, default: false }
 }, { timestamps: true });
 const User = model('User', userSchema);
 
 const messageSchema = new Schema({
-    sender_id: { type: Schema.Types.ObjectId, ref: 'User' },
-    receiver_id: { type: Schema.Types.ObjectId, ref: 'User' },
-    content: String,
-    media_url: String,
-    media_type: String
+  sender: { type: Schema.Types.ObjectId, ref: 'User' },
+  receiver: { type: Schema.Types.ObjectId, ref: 'User' },
+  content: String,
+  media: String,
+  mediaType: String
 }, { timestamps: true });
 const Message = model('Message', messageSchema);
 
 const statusSchema = new Schema({
-    user_id: { type: Schema.Types.ObjectId, ref: 'User' },
-    content: String,
-    media_url: String,
-    media_type: String,
-    expire_at: Date
+  user: { type: Schema.Types.ObjectId, ref: 'User' },
+  content: String,
+  media: String,
+  mediaType: String,
+  expireAt: Date
 }, { timestamps: true });
 const Status = model('Status', statusSchema);
-
-// --------------------
-// Auth & Session Middleware
-// --------------------
-const requireLogin = (req, res, next) => {
-    if (req.session.userId) next();
-    else res.send('<h1 style="text-align:center;margin-top:50px;">Unauthorized. Please login first.</h1>');
-};
-
-const requireAdmin = async (req, res, next) => {
-    if (!req.session.userId) return res.send('Unauthorized');
-    const user = await User.findById(req.session.userId);
-    if (user && user.isAdmin) next();
-    else res.send('Admin only');
-};
 
 // --------------------
 // Routes
 // --------------------
 
-// Root redirect to login
-app.get('/', (req, res) => res.redirect('/login'));
-
-// --------------------
-// Signup & Login
-// --------------------
-app.get('/signup', (req, res) => {
-    res.send(`
-    <html><head><title>Sign Up</title>
-    <style>body{margin:0;font-family:sans-serif;background:#f0f4f7;display:flex;justify-content:center;align-items:center;height:100vh;}
-    form{background:white;padding:20px;border-radius:10px;width:90%;max-width:400px;box-shadow:0 2px 10px rgba(0,0,0,0.2);}
-    input{width:100%;padding:10px;margin:5px 0;border-radius:5px;border:1px solid #ccc;}
-    button{width:100%;padding:10px;background:#1976d2;color:white;border:none;border-radius:5px;margin-top:10px;}
-    </style></head><body>
-    <form action="/signup" method="post" enctype="multipart/form-data">
-    <h2 style="text-align:center;">Sign Up</h2>
-    <input name="username" placeholder="Username" required>
-    <input name="email" placeholder="Email" type="email" required>
-    <input name="password" placeholder="Password" type="password" required>
-    <input type="file" name="profile_photo">
-    <button type="submit">Sign Up</button>
-    <p style="text-align:center;margin-top:10px;">Already have an account? <a href="/login">Login</a></p>
-    </form>
-    </body></html>
-    `);
+// Root redirect
+app.get('/', (req, res) => {
+  res.redirect('/login');
 });
 
-app.post('/signup', async (req, res) => {
-    try {
-        const { username, email, password } = req.body;
-        if (!username || !email || !password) return res.send('Missing fields');
-        const hash = await bcrypt.hash(password, 10);
-        let profile_photo = null;
-        if (req.files && req.files.profile_photo) {
-            const file = req.files.profile_photo;
-            const fileName = Date.now() + '-' + file.name;
-            await file.mv(path.join(uploadsDir, fileName));
-            profile_photo = '/uploads/' + fileName;
-        }
-        const user = new User({ username, email, password: hash, profile_photo });
-        await user.save();
-        res.redirect('/login');
-    } catch (e) {
-        console.log(e);
-        res.send('Signup error. Username or Email may already exist.');
-    }
-});
-
+// --------------------
+// Login Page
+// --------------------
 app.get('/login', (req, res) => {
-    res.send(`
-    <html><head><title>Login</title>
-    <style>body{margin:0;font-family:sans-serif;background:#f0f4f7;display:flex;justify-content:center;align-items:center;height:100vh;}
-    form{background:white;padding:20px;border-radius:10px;width:90%;max-width:400px;box-shadow:0 2px 10px rgba(0,0,0,0.2);}
-    input{width:100%;padding:10px;margin:5px 0;border-radius:5px;border:1px solid #ccc;}
-    button{width:100%;padding:10px;background:#1976d2;color:white;border:none;border-radius:5px;margin-top:10px;}
-    </style></head><body>
-    <form action="/login" method="post">
-    <h2 style="text-align:center;">Login</h2>
-    <input name="username" placeholder="Username" required>
-    <input name="password" placeholder="Password" type="password" required>
-    <button type="submit">Login</button>
-    <p style="text-align:center;margin-top:10px;">No account? <a href="/signup">Sign Up</a></p>
-    </form>
-    </body></html>
-    `);
-});
-
-app.post('/login', async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        const user = await User.findOne({ username });
-        if (!user) return res.send('Invalid username or password');
-        const valid = await bcrypt.compare(password, user.password);
-        if (!valid) return res.send('Invalid username or password');
-        req.session.userId = user._id;
-        res.redirect('/dashboard');
-    } catch (e) {
-        console.log(e);
-        res.send('Login error');
-    }
-});
-
-app.get('/logout', (req, res) => {
-    req.session.destroy();
-    res.redirect('/login');
-});
-
-// --------------------
-// Dashboard (chat + status)
-// --------------------
-app.get('/dashboard', requireLogin, async (req, res) => {
-    const currentUser = await User.findById(req.session.userId);
-    const otherUsers = await User.find({ _id: { $ne: req.session.userId } });
-
-    let usersHTML = '';
-    otherUsers.forEach(u => {
-        usersHTML += `<div class="chat-user" data-id="${u._id}" style="margin:5px;padding:5px;border-bottom:1px solid #ccc;cursor:pointer;">
-        <img src="${u.profile_photo||'https://via.placeholder.com/40'}" width="40" height="40" style="border-radius:50%;vertical-align:middle;">
-        <span>${u.username}</span>
-        </div>`;
-    });
-
-    res.send(`
+  res.send(`
 <!DOCTYPE html>
 <html>
 <head>
-<title>Airo Dashboard</title>
-<script src="/socket.io/socket.io.js"></script>
-<style>
-body,html{margin:0;padding:0;height:100%;font-family:sans-serif;}
-.flex{display:flex;height:100%;}
-.contacts{width:25%;background:#fff;border-right:1px solid #ccc;overflow-y:auto;padding:10px;}
-.chat{flex:1;display:flex;flex-direction:column;}
-.chat-header{padding:10px;background:#1976d2;color:white;font-weight:bold;}
-.chat-messages{flex:1;padding:10px;overflow-y:auto;background:#e3f2fd;}
-.chat-input{display:flex;padding:10px;background:#fff;border-top:1px solid #ccc;}
-input[type=text]{flex:1;padding:10px;margin-right:5px;border-radius:5px;border:1px solid #ccc;}
-input[type=file]{margin-right:5px;}
-button{padding:10px;background:#1976d2;color:white;border:none;border-radius:5px;}
-</style>
+<meta charset="UTF-8">
+<title>Airo Login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.tailwindcss.com"></script>
 </head>
-<body>
-<div class="flex">
-  <div class="contacts">
-    <h3>Contacts</h3>
-    ${usersHTML}
-    <button onclick="toggleDarkMode()">Toggle Dark Mode</button>
-    <a href="/logout"><button>Logout</button></a>
+<body class="bg-blue-100 flex items-center justify-center h-screen">
+<div class="bg-white p-6 rounded shadow w-full max-w-md">
+<h1 class="text-2xl font-bold mb-4 text-center">Airo Messenger</h1>
+<form id="loginForm" class="flex flex-col gap-3">
+  <input type="text" placeholder="Username" id="username" class="border p-2 rounded" required>
+  <input type="password" placeholder="Password" id="password" class="border p-2 rounded" required>
+  <button type="submit" class="bg-blue-500 text-white p-2 rounded">Login</button>
+</form>
+<div class="mt-4 text-center">
+  <button id="signupBtn" class="text-blue-700 underline">Sign Up</button>
+</div>
+<script>
+document.getElementById('signupBtn').onclick = () => { window.location='/signup'; };
+document.getElementById('loginForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const username = document.getElementById('username').value;
+  const password = document.getElementById('password').value;
+  const res = await fetch('/api/login', {
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({ username, password })
+  });
+  const data = await res.json();
+  if(data.error){ alert(data.error); return; }
+  localStorage.setItem('userId', data.userId);
+  window.location='/chat';
+};
+</script>
+</body>
+</html>
+  `);
+});
+
+// --------------------
+// Sign-up Page
+// --------------------
+app.get('/signup', (req, res) => {
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Airo Sign Up</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-blue-100 flex items-center justify-center h-screen">
+<div class="bg-white p-6 rounded shadow w-full max-w-md overflow-auto">
+<h1 class="text-2xl font-bold mb-4 text-center">Sign Up</h1>
+<form id="signupForm" class="flex flex-col gap-2">
+  <input type="text" placeholder="Full Name" id="fullName" class="border p-2 rounded" required>
+  <input type="text" placeholder="Username" id="username" class="border p-2 rounded" required>
+  <input type="password" placeholder="Password" id="password" class="border p-2 rounded" required>
+  <input type="date" placeholder="Date of Birth" id="dob" class="border p-2 rounded" required>
+  <input type="email" placeholder="Email" id="email" class="border p-2 rounded" required>
+  <textarea placeholder="Bio" id="bio" class="border p-2 rounded"></textarea>
+  <button type="submit" class="bg-blue-500 text-white p-2 rounded">Sign Up</button>
+</form>
+<div class="mt-4 text-center">
+  <button id="loginBtn" class="text-blue-700 underline">Back to Login</button>
+</div>
+<script>
+document.getElementById('loginBtn').onclick = () => { window.location='/login'; };
+document.getElementById('signupForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const fullName=document.getElementById('fullName').value;
+  const username=document.getElementById('username').value;
+  const password=document.getElementById('password').value;
+  const dob=document.getElementById('dob').value;
+  const email=document.getElementById('email').value;
+  const bio=document.getElementById('bio').value;
+  const res=await fetch('/api/signup',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({fullName,username,password,dob,email,bio})
+  });
+  const data=await res.json();
+  if(data.error){ alert(data.error); return; }
+  alert('Sign-up successful! Verification code sent to admin.');
+  window.location='/login';
+};
+</script>
+</body>
+</html>
+  `);
+});
+
+// --------------------
+// API Endpoints
+// --------------------
+
+// Signup API
+app.post('/api/signup', async (req,res)=>{
+  try{
+    const { fullName, username, password, dob, email, bio } = req.body;
+    if(!fullName||!username||!password||!dob||!email) return res.json({ error:'Missing fields' });
+    const existing = await User.findOne({ username });
+    if(existing) return res.json({ error:'Username already exists' });
+    const hash = await bcrypt.hash(password,10);
+    const user = new User({ fullName, username, password:hash, dob, email, bio });
+    await user.save();
+    return res.json({ success:true, message:'Sign-up successful, awaiting verification' });
+  }catch(e){
+    console.log(e);
+    return res.json({ error:'Server error' });
+  }
+});
+
+// Login API
+app.post('/api/login', async (req,res)=>{
+  try{
+    const { username, password } = req.body;
+    if(!username||!password) return res.json({ error:'Missing fields' });
+    const user = await User.findOne({ username });
+    if(!user) return res.json({ error:'User not found' });
+    const valid = await bcrypt.compare(password,user.password);
+    if(!valid) return res.json({ error:'Wrong password' });
+    if(!user.verified) return res.json({ error:'Account not verified' });
+    return res.json({ success:true, userId:user._id });
+  }catch(e){
+    console.log(e);
+    return res.json({ error:'Server error' });
+  }
+});
+
+// --------------------
+// Chat & Status Page
+// --------------------
+app.get('/chat', async (req,res)=>{
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Airo Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="/socket.io/socket.io.js"></script>
+</head>
+<body class="bg-blue-50 h-screen flex flex-col">
+<div class="flex-1 flex overflow-hidden">
+  <!-- Contacts -->
+  <div class="w-1/4 bg-white p-2 overflow-y-auto">
+    <h2 class="font-bold mb-2">Contacts</h2>
+    <div id="contacts"></div>
+    <button id="statusBtn" class="bg-blue-500 text-white p-2 rounded mt-2 w-full">View Status</button>
   </div>
-  <div class="chat">
-    <div class="chat-header">Select a contact</div>
-    <div class="chat-messages"></div>
-    <div class="chat-input">
-      <input id="msg-input" type="text" placeholder="Type message...">
-      <input type="file" id="media-input">
-      <button onclick="sendMsg()">Send</button>
+  <!-- Chat -->
+  <div class="flex-1 flex flex-col">
+    <div id="chatHeader" class="bg-white p-2 font-bold border-b">Select Contact</div>
+    <div id="messages" class="flex-1 p-2 overflow-y-auto bg-gray-100"></div>
+    <div class="p-2 bg-white flex gap-2 border-t">
+      <input type="text" id="messageInput" placeholder="Message" class="flex-1 border p-2 rounded">
+      <input type="file" id="mediaInput">
+      <button id="sendBtn" class="bg-blue-500 text-white px-3 rounded">Send</button>
     </div>
   </div>
 </div>
 <script>
-const socket = io();
-let selectedUserId = null;
+const socket=io();
+let selectedUser=null;
+const userId=localStorage.getItem('userId');
 
-document.querySelectorAll('.chat-user').forEach(el=>{
-    el.onclick = ()=>{
-        selectedUserId = el.dataset.id;
-        document.querySelector('.chat-header').innerText = el.innerText;
-        loadMessages();
-    }
-});
-
+async function loadContacts(){
+  const res=await fetch('/api/users');
+  const users=await res.json();
+  const contactsDiv=document.getElementById('contacts');
+  contactsDiv.innerHTML='';
+  users.forEach(u=>{
+    if(u._id===userId) return;
+    const div=document.createElement('div');
+    div.className='p-2 border-b cursor-pointer';
+    div.innerText=u.username;
+    div.onclick=()=>{ selectedUser=u._id; document.getElementById('chatHeader').innerText=u.username; loadMessages(); };
+    contactsDiv.appendChild(div);
+  });
+}
 async function loadMessages(){
-    if(!selectedUserId) return;
-    const res = await fetch('/chat/'+selectedUserId);
-    const msgs = await res.json();
-    const chatDiv = document.querySelector('.chat-messages');
-    chatDiv.innerHTML='';
-    msgs.forEach(m=>{
-        const div = document.createElement('div');
-        div.textContent = m.content;
-        div.style.textAlign = m.sender_id === '${currentUser._id}' ? 'right' : 'left';
-        chatDiv.appendChild(div);
-    });
-}
-
-async function sendMsg(){
-    if(!selectedUserId) return;
-    const content = document.getElementById('msg-input').value;
-    const media = document.getElementById('media-input').files[0];
-    const form = new FormData();
-    form.append('content', content);
-    if(media) form.append('media', media);
-    await fetch('/chat/'+selectedUserId, { method:'POST', body: form });
-    document.getElementById('msg-input').value='';
-    document.getElementById('media-input').value='';
-    loadMessages();
-}
-
-socket.on('receiveMessage', ()=>{ loadMessages(); });
-
-function toggleDarkMode(){
-    document.body.classList.toggle('dark');
-    if(document.body.classList.contains('dark')){
-        document.body.style.background='#222';
-        document.body.style.color='white';
-    }else{
-        document.body.style.background='';
-        document.body.style.color='';
+  if(!selectedUser) return;
+  const res=await fetch('/api/messages/'+selectedUser);
+  const msgs=await res.json();
+  const msgDiv=document.getElementById('messages');
+  msgDiv.innerHTML='';
+  msgs.forEach(m=>{
+    const div=document.createElement('div');
+    div.className=m.sender===userId?'text-right mb-1':'text-left mb-1';
+    let content=m.content||'';
+    if(m.media){
+      if(m.mediaType.startsWith('image')) content+='<br><img src="'+m.media+'" class="max-w-xs">';
+      if(m.mediaType.startsWith('video')) content+='<br><video src="'+m.media+'" class="max-w-xs" controls></video>';
     }
+    div.innerHTML=content;
+    msgDiv.appendChild(div);
+  });
+  msgDiv.scrollTop=msgDiv.scrollHeight;
 }
+document.getElementById('sendBtn').onclick=async()=>{
+  if(!selectedUser) return alert('Select a contact');
+  const content=document.getElementById('messageInput').value;
+  const media=document.getElementById('mediaInput').files[0];
+  const form=new FormData();
+  form.append('content',content);
+  if(media) form.append('media',media);
+  form.append('receiver',selectedUser);
+  form.append('sender',userId);
+  await fetch('/api/messages',{ method:'POST', body:form });
+  document.getElementById('messageInput').value='';
+  document.getElementById('mediaInput').value='';
+  loadMessages();
+};
+socket.on('newMessage', msg=>{
+  if(msg.sender===selectedUser||msg.receiver===selectedUser) loadMessages();
+});
+loadContacts();
 </script>
 </body>
 </html>
-    `);
+  `);
 });
 
 // --------------------
-// Chat API
+// API for Users
 // --------------------
-app.get('/chat/:userId', requireLogin, async (req,res)=>{
-    const messages = await Message.find({
-        $or:[
-            { sender_id:req.session.userId, receiver_id:req.params.userId },
-            { sender_id:req.params.userId, receiver_id:req.session.userId }
-        ]
-    }).sort({ createdAt:1 });
-    res.json(messages);
+app.get('/api/users', async (req,res)=>{
+  const users = await User.find({ verified:true });
+  res.json(users);
 });
 
-app.post('/chat/:userId', requireLogin, async (req,res)=>{
-    let media_url=null, media_type=null;
+// --------------------
+// API for Messages
+// --------------------
+app.post('/api/messages', async (req,res)=>{
+  try{
+    const sender=req.body.sender;
+    const receiver=req.body.receiver;
+    const content=req.body.content;
+    let media=null, mediaType=null;
     if(req.files && req.files.media){
-        const file = req.files.media;
-        const fileName = Date.now()+'-'+file.name;
-        await file.mv(path.join(uploadsDir, fileName));
-        media_url='/uploads/'+fileName;
-        media_type=file.mimetype;
+      const file=req.files.media;
+      const fileName=Date.now()+'-'+file.name;
+      const filePath=path.join(uploadsDir,fileName);
+      await file.mv(filePath);
+      media='/uploads/'+fileName;
+      mediaType=file.mimetype;
     }
-    const message = new Message({ sender_id:req.session.userId, receiver_id:req.params.userId, content:req.body.content, media_url, media_type });
+    const message=new Message({ sender, receiver, content, media, mediaType });
     await message.save();
-    io.emit('receiveMessage', message);
-    res.json(message);
+    io.emit('newMessage', message);
+    res.json({ success:true });
+  }catch(e){ console.log(e); res.json({ error:'Error sending message' }); }
+});
+
+app.get('/api/messages/:otherUser', async (req,res)=>{
+  const otherUser=req.params.otherUser;
+  const userId=localStorage?.getItem?.('userId') || null;
+  const messages=await Message.find({
+    $or:[
+      { sender:userId, receiver:otherUser },
+      { sender:otherUser, receiver:userId }
+    ]
+  }).sort({ createdAt:1 });
+  res.json(messages);
 });
 
 // --------------------
-// Status API
+// Status API (30s video limit, 24h expiration)
 // --------------------
-app.post('/status', requireLogin, async (req,res)=>{
-    let media_url=null, media_type=null;
+app.post('/api/status', async (req,res)=>{
+  try{
+    const user=req.body.user;
+    const content=req.body.content;
+    let media=null, mediaType=null;
     if(req.files && req.files.media){
-        const file = req.files.media;
-        const fileName = Date.now()+'-'+file.name;
-        await file.mv(path.join(uploadsDir, fileName));
-        media_url='/uploads/'+fileName;
-        media_type=file.mimetype;
+      const file=req.files.media;
+      if(file.mimetype.startsWith('video/') && file.size>30*1024*1024) return res.json({ error:'Video too long (>30s approx)' });
+      const fileName=Date.now()+'-'+file.name;
+      const filePath=path.join(uploadsDir,fileName);
+      await file.mv(filePath);
+      media='/uploads/'+fileName;
+      mediaType=file.mimetype;
     }
-    const status = new Status({ user_id:req.session.userId, content:req.body.content, media_url, media_type, expire_at:new Date(Date.now()+24*60*60*1000) });
+    const status=new Status({ user, content, media, mediaType, expireAt:new Date(Date.now()+24*60*60*1000) });
     await status.save();
-    res.json(status);
+    res.json({ success:true });
+  }catch(e){ console.log(e); res.json({ error:'Error posting status' }); }
 });
 
-app.get('/status', requireLogin, async (req,res)=>{
-    const statuses = await Status.find({ expire_at: {$gt: new Date()} }).populate('user_id','username profile_photo');
-    res.json(statuses);
-});
-
-// --------------------
-// Admin dashboard
-// --------------------
-app.get('/admin/dashboard', requireLogin, requireAdmin, async (req,res)=>{
-    const users = await User.find();
-    const messages = await Message.find();
-    const statuses = await Status.find();
-
-    let usersHTML='', messagesHTML='', statusesHTML='';
-    users.forEach(u=>usersHTML+=`<tr><td>${u._id}</td><td>${u.username}</td><td>${u.email}</td></tr>`);
-    messages.forEach(m=>messagesHTML+=`<tr><td>${m._id}</td><td>${m.sender_id}</td><td>${m.receiver_id}</td><td>${m.content||''}</td></tr>`);
-    statuses.forEach(s=>statusesHTML+=`<tr><td>${s._id}</td><td>${s.user_id}</td><td>${s.content||''}</td></tr>`);
-
-    res.send(`
-    <html><head><title>Admin</title></head>
-    <body>
-    <h1>Users</h1><table border="1">${usersHTML}</table>
-    <h1>Messages</h1><table border="1">${messagesHTML}</table>
-    <h1>Statuses</h1><table border="1">${statusesHTML}</table>
-    </body></html>
-    `);
+app.get('/api/status', async (req,res)=>{
+  const statuses=await Status.find({ expireAt: { $gt: new Date() } }).populate('user','username profilePhoto');
+  res.json(statuses);
 });
 
 // --------------------
-// Socket.IO
+// Admin Login & Dashboard
 // --------------------
-io.on('connection', socket => {
-    console.log('User connected');
-    socket.on('disconnect', ()=>console.log('User disconnected'));
+app.get('/admin', (req,res)=>{
+  res.send(`
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Admin Login</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-100 flex items-center justify-center h-screen">
+<div class="bg-white p-6 rounded shadow w-full max-w-md">
+<h1 class="text-2xl font-bold mb-4 text-center">Admin Login</h1>
+<form id="adminForm" class="flex flex-col gap-2">
+  <input type="text" placeholder="Username" id="username" class="border p-2 rounded" required>
+  <input type="password" placeholder="Password" id="password" class="border p-2 rounded" required>
+  <button type="submit" class="bg-blue-500 text-white p-2 rounded">Login</button>
+</form>
+<script>
+document.getElementById('adminForm').onsubmit=async(e)=>{
+  e.preventDefault();
+  const username=document.getElementById('username').value;
+  const password=document.getElementById('password').value;
+  const res=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
+  const data=await res.json();
+  if(data.error){ alert(data.error); return; }
+  window.location='/admin/dashboard';
+};
+</script>
+</div>
+</body>
+</html>
+  `);
+});
+
+app.post('/api/admin/login', async(req,res)=>{
+  const { username, password } = req.body;
+  const admin = await User.findOne({ username, isAdmin:true });
+  if(!admin) return res.json({ error:'Admin not found' });
+  const valid = await bcrypt.compare(password, admin.password);
+  if(!valid) return res.json({ error:'Wrong password' });
+  return res.json({ success:true });
+});
+
+app.get('/admin/dashboard', async(req,res)=>{
+  const users = await User.find();
+  const messages = await Message.find();
+  const statuses = await Status.find();
+  let html=`<h1>Admin Dashboard</h1>`;
+  html+=`<h2>Users</h2><ul>`; users.forEach(u=>{ html+=`<li>${u.username} - Verified: ${u.verified}</li>` }); html+=`</ul>`;
+  html+=`<h2>Messages</h2><ul>`; messages.forEach(m=>{ html+=`<li>${m.sender} -> ${m.receiver}: ${m.content||m.media}</li>` }); html+=`</ul>`;
+  html+=`<h2>Status</h2><ul>`; statuses.forEach(s=>{ html+=`<li>${s.user}: ${s.content||s.media}</li>` }); html+=`</ul>`;
+  res.send(html);
 });
 
 // --------------------
-// Start server
+// Start Server
 // --------------------
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, ()=>console.log('Airo Messenger running on port '+PORT));
+server.listen(PORT, ()=>console.log(`Airo Messenger running on port ${PORT}`));
