@@ -1,5 +1,5 @@
 // --------------------
-// airo.js - Full WhatsApp-style Messenger (Single File)
+// airo.js - Full WhatsApp-style Mobile Messenger
 // --------------------
 const express = require('express');
 const fileUpload = require('express-fileupload');
@@ -21,16 +21,7 @@ const PORT = process.env.PORT || 3000;
 // --------------------
 const MONGO_URI = 'mongodb+srv://etiosaodia:destiny@cluster0.a1hcszb.mongodb.net/?appName=Cluster0';
 mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
-  .then(async () => {
-    console.log('MongoDB connected');
-    // Ensure admin exists
-    const adminExists = await User.findOne({ username: 'admin' });
-    if (!adminExists) {
-      const hash = await bcrypt.hash('adminpass', 10);
-      await new User({ fullName: 'Admin', username: 'admin', password: hash, isAdmin: true, verified: true }).save();
-      console.log('Admin user created: username=admin, password=adminpass');
-    }
-  })
+  .then(() => console.log('MongoDB connected'))
   .catch(err => console.log('MongoDB connection error:', err));
 
 // --------------------
@@ -56,9 +47,7 @@ const userSchema = new Schema({
   dob: Date,
   email: String,
   bio: String,
-  profilePhoto: String,
-  verified: { type: Boolean, default: false },
-  isAdmin: { type: Boolean, default: false }
+  profilePhoto: String
 }, { timestamps: true });
 const User = model('User', userSchema);
 
@@ -67,8 +56,9 @@ const messageSchema = new Schema({
   receiver: { type: Schema.Types.ObjectId, ref: 'User' },
   content: String,
   media: String,
-  mediaType: String
-}, { timestamps: true });
+  mediaType: String,
+  createdAt: { type: Date, default: Date.now }
+});
 const Message = model('Message', messageSchema);
 
 const statusSchema = new Schema({
@@ -76,8 +66,9 @@ const statusSchema = new Schema({
   content: String,
   media: String,
   mediaType: String,
-  expireAt: Date
-}, { timestamps: true });
+  expireAt: Date,
+  createdAt: { type: Date, default: Date.now }
+});
 const Status = model('Status', statusSchema);
 
 // --------------------
@@ -85,25 +76,23 @@ const Status = model('Status', statusSchema);
 // --------------------
 
 // Root redirect
-app.get('/', (req, res) => {
-  res.redirect('/login');
-});
+app.get('/', (req,res)=>res.redirect('/login'));
 
 // --------------------
 // Login Page
 // --------------------
-app.get('/login', (req, res) => {
+app.get('/login', (req,res)=>{
   res.send(`
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Airo Login</title>
+<title>Airo Messenger Login</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-blue-100 flex items-center justify-center h-screen">
-<div class="bg-white p-6 rounded shadow w-full max-w-md">
+<div class="bg-white p-5 rounded shadow w-full max-w-sm">
 <h1 class="text-2xl font-bold mb-4 text-center">Airo Messenger</h1>
 <form id="loginForm" class="flex flex-col gap-3">
   <input type="text" placeholder="Username" id="username" class="border p-2 rounded" required>
@@ -114,19 +103,19 @@ app.get('/login', (req, res) => {
   <button id="signupBtn" class="text-blue-700 underline">Sign Up</button>
 </div>
 <script>
-document.getElementById('signupBtn').onclick = () => { window.location='/signup'; };
-document.getElementById('loginForm').onsubmit = async (e) => {
+document.getElementById('signupBtn').onclick = ()=>{ window.location='/signup'; };
+document.getElementById('loginForm').onsubmit=async(e)=>{
   e.preventDefault();
-  const username = document.getElementById('username').value;
-  const password = document.getElementById('password').value;
-  const res = await fetch('/api/login', {
+  const username=document.getElementById('username').value;
+  const password=document.getElementById('password').value;
+  const res=await fetch('/api/login',{
     method:'POST',
     headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({ username, password })
+    body:JSON.stringify({username,password})
   });
-  const data = await res.json();
+  const data=await res.json();
   if(data.error){ alert(data.error); return; }
-  localStorage.setItem('userId', data.userId);
+  localStorage.setItem('userId',data.userId);
   window.location='/chat';
 };
 </script>
@@ -137,20 +126,20 @@ document.getElementById('loginForm').onsubmit = async (e) => {
 });
 
 // --------------------
-// Sign-up Page
+// Signup Page
 // --------------------
-app.get('/signup', (req, res) => {
+app.get('/signup',(req,res)=>{
   res.send(`
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>Airo Sign Up</title>
+<title>Airo Messenger Sign Up</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-blue-100 flex items-center justify-center h-screen">
-<div class="bg-white p-6 rounded shadow w-full max-w-md overflow-auto">
+<div class="bg-white p-5 rounded shadow w-full max-w-sm">
 <h1 class="text-2xl font-bold mb-4 text-center">Sign Up</h1>
 <form id="signupForm" class="flex flex-col gap-2">
   <input type="text" placeholder="Full Name" id="fullName" class="border p-2 rounded" required>
@@ -165,8 +154,8 @@ app.get('/signup', (req, res) => {
   <button id="loginBtn" class="text-blue-700 underline">Back to Login</button>
 </div>
 <script>
-document.getElementById('loginBtn').onclick = () => { window.location='/login'; };
-document.getElementById('signupForm').onsubmit = async (e) => {
+document.getElementById('loginBtn').onclick = ()=>{ window.location='/login'; };
+document.getElementById('signupForm').onsubmit=async(e)=>{
   e.preventDefault();
   const fullName=document.getElementById('fullName').value;
   const username=document.getElementById('username').value;
@@ -181,7 +170,7 @@ document.getElementById('signupForm').onsubmit = async (e) => {
   });
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
-  alert('Sign-up successful! Wait for admin verification.');
+  alert('Sign-up successful! You can now login.');
   window.location='/login';
 };
 </script>
@@ -196,43 +185,42 @@ document.getElementById('signupForm').onsubmit = async (e) => {
 // --------------------
 
 // Signup API
-app.post('/api/signup', async (req,res)=>{
+app.post('/api/signup',async(req,res)=>{
   try{
-    const { fullName, username, password, dob, email, bio } = req.body;
-    if(!fullName||!username||!password||!dob||!email) return res.json({ error:'Missing fields' });
-    const existing = await User.findOne({ username });
-    if(existing) return res.json({ error:'Username already exists' });
-    const hash = await bcrypt.hash(password,10);
-    const user = new User({ fullName, username, password:hash, dob, email, bio });
+    const { fullName,username,password,dob,email,bio } = req.body;
+    if(!fullName||!username||!password||!dob||!email) return res.json({error:'Missing fields'});
+    const exists=await User.findOne({username});
+    if(exists) return res.json({error:'Username exists'});
+    const hash=await bcrypt.hash(password,10);
+    const user=new User({fullName,username,password:hash,dob,email,bio});
     await user.save();
-    return res.json({ success:true, message:'Sign-up successful, awaiting verification' });
-  }catch(e){
-    console.log(e);
-    return res.json({ error:'Server error' });
-  }
+    return res.json({success:true,userId:user._id});
+  }catch(e){console.log(e);return res.json({error:'Server error'});}
 });
 
 // Login API
-app.post('/api/login', async (req,res)=>{
+app.post('/api/login',async(req,res)=>{
   try{
-    const { username, password } = req.body;
-    if(!username||!password) return res.json({ error:'Missing fields' });
-    const user = await User.findOne({ username });
-    if(!user) return res.json({ error:'User not found' });
-    const valid = await bcrypt.compare(password,user.password);
-    if(!valid) return res.json({ error:'Wrong password' });
-    if(!user.verified) return res.json({ error:'Account not verified' });
-    return res.json({ success:true, userId:user._id });
-  }catch(e){
-    console.log(e);
-    return res.json({ error:'Server error' });
-  }
+    const { username,password }=req.body;
+    if(!username||!password) return res.json({error:'Missing fields'});
+    const user=await User.findOne({username});
+    if(!user) return res.json({error:'User not found'});
+    const valid=await bcrypt.compare(password,user.password);
+    if(!valid) return res.json({error:'Wrong password'});
+    return res.json({success:true,userId:user._id});
+  }catch(e){console.log(e);return res.json({error:'Server error'});}
+});
+
+// Get all users
+app.get('/api/users',async(req,res)=>{
+  const users=await User.find();
+  res.json(users);
 });
 
 // --------------------
-// Chat & Status Page
+// Chat Page (Mobile Only)
 // --------------------
-app.get('/chat', async (req,res)=>{
+app.get('/chat',async(req,res)=>{
   res.send(`
 <!DOCTYPE html>
 <html>
@@ -244,22 +232,14 @@ app.get('/chat', async (req,res)=>{
 <script src="/socket.io/socket.io.js"></script>
 </head>
 <body class="bg-blue-50 h-screen flex flex-col">
-<div class="flex-1 flex overflow-hidden">
-  <!-- Contacts -->
-  <div class="w-1/4 bg-white p-2 overflow-y-auto">
-    <h2 class="font-bold mb-2">Contacts</h2>
-    <div id="contacts"></div>
-    <button id="statusBtn" class="bg-blue-500 text-white p-2 rounded mt-2 w-full">View Status</button>
-  </div>
-  <!-- Chat -->
-  <div class="flex-1 flex flex-col">
-    <div id="chatHeader" class="bg-white p-2 font-bold border-b">Select Contact</div>
-    <div id="messages" class="flex-1 p-2 overflow-y-auto bg-gray-100"></div>
-    <div class="p-2 bg-white flex gap-2 border-t">
-      <input type="text" id="messageInput" placeholder="Message" class="flex-1 border p-2 rounded">
-      <input type="file" id="mediaInput">
-      <button id="sendBtn" class="bg-blue-500 text-white px-3 rounded">Send</button>
-    </div>
+<div class="flex-1 flex flex-col">
+  <div id="contacts" class="bg-white p-2 border-b flex overflow-x-auto"></div>
+  <div id="chatHeader" class="bg-white p-2 font-bold border-b">Select Contact</div>
+  <div id="messages" class="flex-1 p-2 overflow-y-auto bg-gray-100"></div>
+  <div class="p-2 bg-white flex gap-2 border-t">
+    <input type="text" id="messageInput" placeholder="Message" class="flex-1 border p-2 rounded">
+    <input type="file" id="mediaInput">
+    <button id="sendBtn" class="bg-blue-500 text-white px-3 rounded">Send</button>
   </div>
 </div>
 <script>
@@ -275,7 +255,7 @@ async function loadContacts(){
   users.forEach(u=>{
     if(u._id===userId) return;
     const div=document.createElement('div');
-    div.className='p-2 border-b cursor-pointer';
+    div.className='p-2 border-r cursor-pointer';
     div.innerText=u.username;
     div.onclick=()=>{ selectedUser=u._id; document.getElementById('chatHeader').innerText=u.username; loadMessages(); };
     contactsDiv.appendChild(div);
@@ -311,13 +291,13 @@ document.getElementById('sendBtn').onclick=async()=>{
   if(media) form.append('media',media);
   form.append('receiver',selectedUser);
   form.append('sender',userId);
-  await fetch('/api/messages',{ method:'POST', body:form });
+  await fetch('/api/messages',{method:'POST',body:form});
   document.getElementById('messageInput').value='';
   document.getElementById('mediaInput').value='';
   loadMessages();
 };
 
-socket.on('newMessage', msg=>{
+socket.on('newMessage',msg=>{
   if(msg.sender===selectedUser||msg.receiver===selectedUser) loadMessages();
 });
 
@@ -329,21 +309,11 @@ loadContacts();
 });
 
 // --------------------
-// API for Users
-// --------------------
-app.get('/api/users', async (req,res)=>{
-  const users = await User.find({ verified:true });
-  res.json(users);
-});
-
-// --------------------
 // API for Messages
 // --------------------
-app.post('/api/messages', async (req,res)=>{
+app.post('/api/messages',async(req,res)=>{
   try{
-    const sender=req.body.sender;
-    const receiver=req.body.receiver;
-    const content=req.body.content;
+    const { sender, receiver, content }=req.body;
     let media=null, mediaType=null;
     if(req.files && req.files.media){
       const file=req.files.media;
@@ -353,25 +323,52 @@ app.post('/api/messages', async (req,res)=>{
       media='/uploads/'+fileName;
       mediaType=file.mimetype;
     }
-    const message=new Message({ sender, receiver, content, media, mediaType });
+    const message=new Message({sender,receiver,content,media,mediaType});
     await message.save();
-    io.emit('newMessage', message);
-    res.json({ success:true });
-  }catch(e){ console.log(e); res.json({ error:'Error sending message' }); }
+    io.emit('newMessage',message);
+    res.json({success:true});
+  }catch(e){console.log(e);res.json({error:'Error sending message'});}
 });
 
-app.get('/api/messages/:userId/:otherUser', async (req,res)=>{
-  const { userId, otherUser } = req.params;
-  const messages=await Message.find({
+app.get('/api/messages/:userId/:otherUser',async(req,res)=>{
+  const { userId, otherUser }=req.params;
+  const msgs=await Message.find({
     $or:[
       { sender:userId, receiver:otherUser },
       { sender:otherUser, receiver:userId }
     ]
-  }).sort({ createdAt:1 });
-  res.json(messages);
+  }).sort({createdAt:1});
+  res.json(msgs);
+});
+
+// --------------------
+// Status API
+// --------------------
+app.post('/api/status',async(req,res)=>{
+  try{
+    const { user, content }=req.body;
+    let media=null, mediaType=null;
+    if(req.files && req.files.media){
+      const file=req.files.media;
+      if(file.mimetype.startsWith('video/') && file.size>30*1024*1024) return res.json({error:'Video too long'});
+      const fileName=Date.now()+'-'+file.name;
+      const filePath=path.join(uploadsDir,fileName);
+      await file.mv(filePath);
+      media='/uploads/'+fileName;
+      mediaType=file.mimetype;
+    }
+    const status=new Status({user,content,media,mediaType,expireAt:new Date(Date.now()+24*60*60*1000)});
+    await status.save();
+    res.json({success:true});
+  }catch(e){console.log(e);res.json({error:'Error posting status'});}
+});
+
+app.get('/api/status',async(req,res)=>{
+  const statuses=await Status.find({expireAt:{$gt:new Date()}}).populate('user','username profilePhoto');
+  res.json(statuses);
 });
 
 // --------------------
 // Start Server
 // --------------------
-server.listen(PORT, ()=>console.log(`Airo Messenger running on port ${PORT}`));
+server.listen(PORT,()=>console.log(\`Airo Messenger mobile-only running on port \${PORT}\`));
