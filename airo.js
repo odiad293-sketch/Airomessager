@@ -23,10 +23,13 @@ const MONGO_URI = 'mongodb+srv://etiosaodia:destiny@cluster0.a1hcszb.mongodb.net
 mongoose.connect(MONGO_URI, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(async () => {
     console.log('MongoDB connected');
-    // Delete old test users/messages on first run
-    await User.deleteMany({}); 
-    await Message.deleteMany({});
-    await Status.deleteMany({});
+    // Ensure admin exists
+    const adminExists = await User.findOne({ username: 'admin' });
+    if (!adminExists) {
+      const hash = await bcrypt.hash('adminpass', 10);
+      await new User({ fullName: 'Admin', username: 'admin', password: hash, isAdmin: true, verified: true }).save();
+      console.log('Admin user created: username=admin, password=adminpass');
+    }
   })
   .catch(err => console.log('MongoDB connection error:', err));
 
@@ -127,6 +130,7 @@ document.getElementById('loginForm').onsubmit = async (e) => {
   window.location='/chat';
 };
 </script>
+</div>
 </body>
 </html>
   `);
@@ -177,10 +181,11 @@ document.getElementById('signupForm').onsubmit = async (e) => {
   });
   const data=await res.json();
   if(data.error){ alert(data.error); return; }
-  alert('Sign-up successful! Verification code sent to admin.');
+  alert('Sign-up successful! Wait for admin verification.');
   window.location='/login';
 };
 </script>
+</div>
 </body>
 </html>
   `);
@@ -276,9 +281,10 @@ async function loadContacts(){
     contactsDiv.appendChild(div);
   });
 }
+
 async function loadMessages(){
   if(!selectedUser) return;
-  const res=await fetch('/api/messages/'+selectedUser);
+  const res=await fetch(\`/api/messages/\${userId}/\${selectedUser}\`);
   const msgs=await res.json();
   const msgDiv=document.getElementById('messages');
   msgDiv.innerHTML='';
@@ -295,6 +301,7 @@ async function loadMessages(){
   });
   msgDiv.scrollTop=msgDiv.scrollHeight;
 }
+
 document.getElementById('sendBtn').onclick=async()=>{
   if(!selectedUser) return alert('Select a contact');
   const content=document.getElementById('messageInput').value;
@@ -309,9 +316,11 @@ document.getElementById('sendBtn').onclick=async()=>{
   document.getElementById('mediaInput').value='';
   loadMessages();
 };
+
 socket.on('newMessage', msg=>{
   if(msg.sender===selectedUser||msg.receiver===selectedUser) loadMessages();
 });
+
 loadContacts();
 </script>
 </body>
@@ -351,9 +360,8 @@ app.post('/api/messages', async (req,res)=>{
   }catch(e){ console.log(e); res.json({ error:'Error sending message' }); }
 });
 
-app.get('/api/messages/:otherUser', async (req,res)=>{
-  const otherUser=req.params.otherUser;
-  const userId=localStorage?.getItem?.('userId') || null;
+app.get('/api/messages/:userId/:otherUser', async (req,res)=>{
+  const { userId, otherUser } = req.params;
   const messages=await Message.find({
     $or:[
       { sender:userId, receiver:otherUser },
@@ -361,92 +369,6 @@ app.get('/api/messages/:otherUser', async (req,res)=>{
     ]
   }).sort({ createdAt:1 });
   res.json(messages);
-});
-
-// --------------------
-// Status API (30s video limit, 24h expiration)
-// --------------------
-app.post('/api/status', async (req,res)=>{
-  try{
-    const user=req.body.user;
-    const content=req.body.content;
-    let media=null, mediaType=null;
-    if(req.files && req.files.media){
-      const file=req.files.media;
-      if(file.mimetype.startsWith('video/') && file.size>30*1024*1024) return res.json({ error:'Video too long (>30s approx)' });
-      const fileName=Date.now()+'-'+file.name;
-      const filePath=path.join(uploadsDir,fileName);
-      await file.mv(filePath);
-      media='/uploads/'+fileName;
-      mediaType=file.mimetype;
-    }
-    const status=new Status({ user, content, media, mediaType, expireAt:new Date(Date.now()+24*60*60*1000) });
-    await status.save();
-    res.json({ success:true });
-  }catch(e){ console.log(e); res.json({ error:'Error posting status' }); }
-});
-
-app.get('/api/status', async (req,res)=>{
-  const statuses=await Status.find({ expireAt: { $gt: new Date() } }).populate('user','username profilePhoto');
-  res.json(statuses);
-});
-
-// --------------------
-// Admin Login & Dashboard
-// --------------------
-app.get('/admin', (req,res)=>{
-  res.send(`
-<!DOCTYPE html>
-<html>
-<head>
-<meta charset="UTF-8">
-<title>Admin Login</title>
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<script src="https://cdn.tailwindcss.com"></script>
-</head>
-<body class="bg-gray-100 flex items-center justify-center h-screen">
-<div class="bg-white p-6 rounded shadow w-full max-w-md">
-<h1 class="text-2xl font-bold mb-4 text-center">Admin Login</h1>
-<form id="adminForm" class="flex flex-col gap-2">
-  <input type="text" placeholder="Username" id="username" class="border p-2 rounded" required>
-  <input type="password" placeholder="Password" id="password" class="border p-2 rounded" required>
-  <button type="submit" class="bg-blue-500 text-white p-2 rounded">Login</button>
-</form>
-<script>
-document.getElementById('adminForm').onsubmit=async(e)=>{
-  e.preventDefault();
-  const username=document.getElementById('username').value;
-  const password=document.getElementById('password').value;
-  const res=await fetch('/api/admin/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});
-  const data=await res.json();
-  if(data.error){ alert(data.error); return; }
-  window.location='/admin/dashboard';
-};
-</script>
-</div>
-</body>
-</html>
-  `);
-});
-
-app.post('/api/admin/login', async(req,res)=>{
-  const { username, password } = req.body;
-  const admin = await User.findOne({ username, isAdmin:true });
-  if(!admin) return res.json({ error:'Admin not found' });
-  const valid = await bcrypt.compare(password, admin.password);
-  if(!valid) return res.json({ error:'Wrong password' });
-  return res.json({ success:true });
-});
-
-app.get('/admin/dashboard', async(req,res)=>{
-  const users = await User.find();
-  const messages = await Message.find();
-  const statuses = await Status.find();
-  let html=`<h1>Admin Dashboard</h1>`;
-  html+=`<h2>Users</h2><ul>`; users.forEach(u=>{ html+=`<li>${u.username} - Verified: ${u.verified}</li>` }); html+=`</ul>`;
-  html+=`<h2>Messages</h2><ul>`; messages.forEach(m=>{ html+=`<li>${m.sender} -> ${m.receiver}: ${m.content||m.media}</li>` }); html+=`</ul>`;
-  html+=`<h2>Status</h2><ul>`; statuses.forEach(s=>{ html+=`<li>${s.user}: ${s.content||s.media}</li>` }); html+=`</ul>`;
-  res.send(html);
 });
 
 // --------------------
