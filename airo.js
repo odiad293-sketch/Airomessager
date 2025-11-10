@@ -14,7 +14,7 @@ const app = express();
 const server = http.createServer(app);
 const io = socketIO(server);
 
-const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => console.log(`Airo Messenger running on port ${PORT}`));
 
 // --------------------
 // MongoDB Connection
