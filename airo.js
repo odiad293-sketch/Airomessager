@@ -371,4 +371,6 @@ app.get('/api/status',async(req,res)=>{
 // --------------------
 // Start Server
 // --------------------
-server.listen(PORT,()=>console.log(\`Airo Messenger mobile-only running on port \${PORT}\`));
+server.listen(PORT, () => {
+  console.log("Airo Messenger mobile-only running on port " + PORT);
+});
