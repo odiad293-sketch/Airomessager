@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OneFile Social Media App</title>
+<style>
+/* ===============================
+   GLOBAL STYLES
+================================*/
+:root {
+  --primary: #1877f2;
+  --background: #f0f2f5;
+  --text: #111;
+  --card: #fff;
+}
+body.dark {
+  --background: #18191a;
+  --card: #242526;
+  --text: #e4e6eb;
+}
+body {
+  margin: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: var(--background);
+  color: var(--text);
+  transition: background 0.3s, color 0.3s;
+}
+header {
+  background: var(--primary);
+  color: white;
+  padding: 10px 20px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+header h1 { font-size: 20px; margin: 0; }
+header button {
+  background: none;
+  border: none;
+  color: white;
+  cursor: pointer;
+  font-size: 16px;
+}
+.container {
+  max-width: 800px;
+  margin: 20px auto;
+  padding: 0 15px;
+}
+.card {
+  background: var(--card);
+  border-radius: 8px;
+  padding: 15px;
+  margin-bottom: 15px;
+  box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+}
+input, textarea {
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  font-size: 14px;
+  margin-bottom: 10px;
+}
+button {
+  background: var(--primary);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  padding: 10px 16px;
+  cursor: pointer;
+  font-size: 14px;
+}
+button:hover { opacity: 0.9; }
+.post img {
+  max-width: 100%;
+  border-radius: 8px;
+  margin-top: 10px;
+}
+.like-btn {
+  color: var(--primary);
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.comment-section {
+  margin-top: 10px;
+}
+.comment {
+  font-size: 14px;
+  background: var(--background);
+  padding: 5px 8px;
+  border-radius: 6px;
+  margin-top: 5px;
+}
+nav {
+  display: flex;
+  justify-content: space-around;
+  margin-bottom: 20px;
+}
+nav button {
+  flex: 1;
+  margin: 0 5px;
+  background: var(--card);
+  color: var(--text);
+  border: 1px solid #ccc;
+}
+nav button.active {
+  background: var(--primary);
+  color: white;
+}
+/* Responsive */
+@media(max-width:600px){
+  header h1 { font-size: 16px; }
+  button { font-size: 13px; padding: 8px 12px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>OneFile Social</h1>
+  <button id="themeToggle">🌙</button>
+</header>
+
+<div class="container">
+  <div id="authSection" class="card">
+    <h2 id="authTitle">Login</h2>
+    <input id="username" placeholder="Username">
+    <input id="password" type="password" placeholder="Password">
+    <button id="authBtn">Login</button>
+    <p id="toggleAuth">No account? <a href="#" id="switchToRegister">Register</a></p>
+  </div>
+
+  <div id="mainSection" style="display:none;">
+    <nav>
+      <button id="feedTab" class="active">Feed</button>
+      <button id="profileTab">Profile</button>
+      <button id="logoutBtn">Logout</button>
+    </nav>
+
+    <div id="feedView">
+      <div class="card">
+        <h3>Create Post</h3>
+        <textarea id="postText" placeholder="What's on your mind?"></textarea>
+        <input type="file" id="postImage" accept="image/*">
+        <button id="createPostBtn">Post</button>
+      </div>
+      <div class="card">
+        <input type="text" id="searchBox" placeholder="Search posts...">
+      </div>
+      <div id="feedContainer"></div>
+    </div>
+
+    <div id="profileView" style="display:none;">
+      <div class="card">
+        <h2 id="profileUsername"></h2>
+        <p>Posts by you</p>
+      </div>
+      <div id="profilePosts"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ===============================
+   LOCALSTORAGE UTILITIES
+================================*/
+const USERS_KEY = "onefile_users";
+const POSTS_KEY = "onefile_posts";
+let currentUser = JSON.parse(localStorage.getItem("currentUser")) || null;
+
+function getUsers() {
+  return JSON.parse(localStorage.getItem(USERS_KEY)) || [];
+}
+function saveUsers(users) {
+  localStorage.setItem(USERS_KEY, JSON.stringify(users));
+}
+function getPosts() {
+  return JSON.parse(localStorage.getItem(POSTS_KEY)) || [];
+}
+function savePosts(posts) {
+  localStorage.setItem(POSTS_KEY, JSON.stringify(posts));
+}
+
+/* ===============================
+   AUTHENTICATION LOGIC
+================================*/
+const authSection = document.getElementById("authSection");
+const mainSection = document.getElementById("mainSection");
+const authTitle = document.getElementById("authTitle");
+const authBtn = document.getElementById("authBtn");
+const switchToRegister = document.getElementById("switchToRegister");
+let isRegistering = false;
+
+function renderAuth() {
+  authTitle.textContent = isRegistering ? "Register" : "Login";
+  authBtn.textContent = isRegistering ? "Register" : "Login";
+  document.getElementById("toggleAuth").innerHTML = isRegistering
+    ? 'Have an account? <a href="#" id="switchToRegister">Login</a>'
+    : 'No account? <a href="#" id="switchToRegister">Register</a>';
+  document.getElementById("switchToRegister").onclick = () => {
+    isRegistering = !isRegistering;
+    renderAuth();
+  };
+}
+renderAuth();
+
+authBtn.onclick = () => {
+  const username = document.getElementById("username").value.trim();
+  const password = document.getElementById("password").value.trim();
+  if (!username || !password) return alert("Fill all fields!");
+
+  let users = getUsers();
+
+  if (isRegistering) {
+    if (users.find(u => u.username === username)) return alert("User exists!");
+    users.push({ username, password });
+    saveUsers(users);
+    alert("Registered! You can now login.");
+    isRegistering = false;
+    renderAuth();
+  } else {
+    const user = users.find(u => u.username === username && u.password === password);
+    if (!user) return alert("Invalid login!");
+    currentUser = user;
+    localStorage.setItem("currentUser", JSON.stringify(user));
+    showMain();
+  }
+};
+
+/* ===============================
+   MAIN APP VIEW
+================================*/
+const feedView = document.getElementById("feedView");
+const profileView = document.getElementById("profileView");
+const feedTab = document.getElementById("feedTab");
+const profileTab = document.getElementById("profileTab");
+const logoutBtn = document.getElementById("logoutBtn");
+
+feedTab.onclick = () => showTab("feed");
+profileTab.onclick = () => showTab("profile");
+logoutBtn.onclick = () => {
+  localStorage.removeItem("currentUser");
+  currentUser = null;
+  authSection.style.display = "block";
+  mainSection.style.display = "none";
+};
+
+function showTab(tab) {
+  feedView.style.display = tab === "feed" ? "block" : "none";
+  profileView.style.display = tab === "profile" ? "block" : "none";
+  feedTab.classList.toggle("active", tab === "feed");
+  profileTab.classList.toggle("active", tab === "profile");
+  if (tab === "profile") renderProfile();
+}
+
+function showMain() {
+  authSection.style.display = "none";
+  mainSection.style.display = "block";
+  renderFeed();
+}
+
+/* ===============================
+   POSTS LOGIC
+================================*/
+const createPostBtn = document.getElementById("createPostBtn");
+const postText = document.getElementById("postText");
+const postImage = document.getElementById("postImage");
+const feedContainer = document.getElementById("feedContainer");
+const searchBox = document.getElementById("searchBox");
+
+createPostBtn.onclick = () => {
+  const text = postText.value.trim();
+  const imageFile = postImage.files[0];
+  if (!text && !imageFile) return alert("Write something!");
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    const posts = getPosts();
+    posts.unshift({
+      id: Date.now(),
+      user: currentUser.username,
+      text,
+      image: e.target.result || null,
+      likes: [],
+      comments: []
+    });
+    savePosts(posts);
+    postText.value = "";
+    postImage.value = "";
+    renderFeed();
+  };
+  if (imageFile) reader.readAsDataURL(imageFile);
+  else reader.onload({ target: { result: null } });
+};
+
+function renderFeed() {
+  const posts = getPosts();
+  const query = searchBox.value.toLowerCase();
+  feedContainer.innerHTML = "";
+  posts
+    .filter(p => p.text.toLowerCase().includes(query))
+    .forEach(p => {
+      const div = document.createElement("div");
+      div.className = "card post";
+      div.innerHTML = `
+        <strong>@${p.user}</strong>
+        <p>${p.text}</p>
+        ${p.image ? `<img src="${p.image}">` : ""}
+        <button class="like-btn">❤️ ${p.likes.length}</button>
+        <div class="comment-section">
+          <input placeholder="Write comment...">
+          <div class="comments">
+            ${p.comments.map(c => `<div class="comment"><b>${c.user}:</b> ${c.text}</div>`).join("")}
+          </div>
+        </div>
+      `;
+      const likeBtn = div.querySelector(".like-btn");
+      likeBtn.onclick = () => {
+        const posts = getPosts();
+        const post = posts.find(x => x.id === p.id);
+        const idx = post.likes.indexOf(currentUser.username);
+        if (idx === -1) post.likes.push(currentUser.username);
+        else post.likes.splice(idx, 1);
+        savePosts(posts);
+        renderFeed();
+      };
+      const commentInput = div.querySelector(".comment-section input");
+      commentInput.onkeypress = e => {
+        if (e.key === "Enter" && commentInput.value.trim()) {
+          const posts = getPosts();
+          const post = posts.find(x => x.id === p.id);
+          post.comments.push({ user: currentUser.username, text: commentInput.value });
+          savePosts(posts);
+          renderFeed();
+        }
+      };
+      feedContainer.appendChild(div);
+    });
+}
+
+searchBox.oninput = renderFeed;
+
+/* ===============================
+   PROFILE
+================================*/
+function renderProfile() {
+  document.getElementById("profileUsername").textContent = "@" + currentUser.username;
+  const profilePosts = document.getElementById("profilePosts");
+  const posts = getPosts().filter(p => p.user === currentUser.username);
+  profilePosts.innerHTML = "";
+  posts.forEach(p => {
+    const div = document.createElement("div");
+    div.className = "card post";
+    div.innerHTML = `<p>${p.text}</p>${p.image ? `<img src="${p.image}">` : ""}`;
+    profilePosts.appendChild(div);
+  });
+}
+
+/* ===============================
+   DARK MODE
+================================*/
+const themeToggle = document.getElementById("themeToggle");
+themeToggle.onclick = () => {
+  document.body.classList.toggle("dark");
+  themeToggle.textContent = document.body.classList.contains("dark") ? "☀️" : "🌙";
+};
+
+/* ===============================
+   INITIAL LOAD
+================================*/
+if (currentUser) showMain();
+</script>
+</body>
+</html>
